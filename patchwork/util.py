@@ -2,10 +2,51 @@
 Helpers and decorators, primarily for internal or advanced use.
 """
 
+import platform
 import textwrap
-
 from functools import wraps
-from inspect import getargspec, formatargspec
+from inspect import getfullargspec
+
+_versions = [int(i) for i in platform.python_version_tuple()]
+if _versions[0] < 3 or (_versions[0] == 3 and _versions[1] < 5):
+    from inspect import formatargspec
+else:
+    from itertools import zip_longest
+    from inspect import Parameter, Signature
+
+    def formatargspec(
+        args, varargs, varkw, defaults, kwonlyargs, kwonlydefaults, annotations
+    ):
+        _none = object()
+        _empty = Parameter.empty
+        params = [
+            Parameter(
+                name=i,
+                kind=Parameter.POSITIONAL_OR_KEYWORD,
+                default=_empty if j is _none else j,
+                annotation=annotations.get(i, _empty),
+            )
+            for i, j in list(
+                zip_longest(reversed(args), reversed(defaults), fillvalue=_none)
+            )[::-1]
+        ]
+        if varargs:
+            params.append(Parameter(name=varargs, kind=Parameter.VAR_POSITIONAL))
+        if varkw:
+            params.append(Parameter(name=varkw, kind=Parameter.VAR_KEYWORD))
+        for i in kwonlyargs:
+            params.append(
+                Parameter(
+                    name=i,
+                    kind=Parameter.KEYWORD_ONLY,
+                    default=kwonlydefaults.get(i, _empty),
+                    annotation=annotations.get(i, _empty),
+                )
+            )
+        return Signature(parameters=params)
+
+
+del _versions
 
 
 # TODO: calling all functions as eg directory(c, '/foo/bar/') (with initial c)
@@ -126,7 +167,9 @@ def munge_docstring(f, inner):
     # Terrible, awful hacks to ensure Sphinx autodoc sees the intended
     # (modified) signature; leverages the fact that autodoc_docstring_signature
     # is True by default.
-    args, varargs, keywords, defaults = getargspec(f)
+    args, varargs, varkw, defaults, kwonlyargs, kwonlydefaults, annotations = (
+        getfullargspec(f)
+    )
     # Nix positional version of runner arg, which is always 2nd
     del args[1]
     # Add new args to end in desired order
@@ -136,7 +179,10 @@ def munge_docstring(f, inner):
     defaults = tuple(list(defaults or []) + [False, "run", None])
     # Get signature first line for Sphinx autodoc_docstring_signature
     sigtext = "{}{}".format(
-        f.__name__, formatargspec(args, varargs, keywords, defaults)
+        f.__name__,
+        formatargspec(
+            args, varargs, varkw, defaults, kwonlyargs, kwonlydefaults, annotations
+        ),
     )
     docstring = textwrap.dedent(inner.__doc__ or "").strip()
     # Construct :param: list
